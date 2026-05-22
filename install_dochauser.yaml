@@ -1,0 +1,313 @@
+---
+- name: Install and run Dochauser stack
+  hosts: localhost
+  connection: local
+  become: true
+
+  vars:
+    current_user: "florian"
+    current_home: "/home/florian"
+    projects_dir: "{{ current_home }}/projects"
+
+    dochauserbatch_src_dir: "{{ projects_dir }}/dochauserbatch"
+    dochausergui_src_dir: "{{ projects_dir }}/dochausergui"
+    dochausersrv_src_dir: "{{ projects_dir }}/dochausersrv"
+    dochauserbuild_src_dir: "{{ projects_dir }}/dochauserbuild"
+
+    dochauser_display_name: "Kaiserhaus DochHauser"
+
+    scanner_user: scanner
+    scanner_group: scanner
+    scanner_uid: 1001
+    scanner_gid: 1001
+
+    scanner_mount_dir: "/home/scanner/dochauser_mount"
+    scanner_config_dir: "{{ scanner_mount_dir }}/config"
+
+    elastic_user: elasticsearch
+    elastic_group: elasticsearch
+    elastic_uid: 1002
+    elastic_gid: 1002
+    elastic_data_dir: "{{ scanner_mount_dir }}/elasticdata"
+
+    batch_config_source_dir: "{{ dochauserbatch_src_dir }}/apps/config"
+
+    expose_archive_smb: true
+    smb_share_name: "dochauser_archive"
+
+    install_ollama: false
+    ollama_base_model: "gemma4:e2b"
+    ollama_context_size: 16384
+
+    repos:
+      - name: dochauserbatch
+        url: https://github.com/Blomdoft/dochauserbatch
+      - name: dochausergui
+        url: https://github.com/Blomdoft/dochausergui
+      - name: dochausersrv
+        url: https://github.com/Blomdoft/dochausersrv
+      - name: dochauserbuild
+        url: https://github.com/Blomdoft/dochauserbuild
+
+  tasks:
+    - name: Install required packages
+      apt:
+        name:
+          - openjdk-17-jdk
+          - maven
+          - git
+          - curl
+          - docker.io
+          - docker-compose
+          - samba
+        state: present
+        update_cache: true
+
+    - name: Enable and start Docker
+      systemd:
+        name: docker
+        enabled: true
+        state: started
+
+    - name: Add current user to docker group
+      user:
+        name: "{{ current_user }}"
+        groups: docker
+        append: true
+
+    - name: Create scanner group
+      group:
+        name: "{{ scanner_group }}"
+        gid: "{{ scanner_gid }}"
+        state: present
+
+    - name: Create scanner user
+      user:
+        name: "{{ scanner_user }}"
+        uid: "{{ scanner_uid }}"
+        group: "{{ scanner_group }}"
+        create_home: true
+        home: "/home/{{ scanner_user }}"
+        shell: /bin/bash
+        state: present
+
+    - name: Make scanner home readable by others
+      file:
+        path: "/home/{{ scanner_user }}"
+        state: directory
+        owner: "{{ scanner_user }}"
+        group: "{{ scanner_group }}"
+        mode: "0755"
+
+    - name: Create elasticsearch group
+      group:
+        name: "{{ elastic_group }}"
+        gid: "{{ elastic_gid }}"
+        state: present
+
+    - name: Create elasticsearch user
+      user:
+        name: "{{ elastic_user }}"
+        uid: "{{ elastic_uid }}"
+        group: "{{ elastic_group }}"
+        create_home: false
+        shell: /usr/sbin/nologin
+        state: present
+
+    - name: Create scanner mount base directory
+      file:
+        path: "{{ scanner_mount_dir }}"
+        state: directory
+        owner: "{{ scanner_user }}"
+        group: "{{ scanner_group }}"
+        mode: "0755"
+
+    - name: Create archive directory
+      file:
+        path: "{{ scanner_mount_dir }}/archive"
+        state: directory
+        owner: "{{ scanner_user }}"
+        group: "{{ scanner_group }}"
+        mode: "0755"
+
+    - name: Create import directory
+      file:
+        path: "{{ scanner_mount_dir }}/import"
+        state: directory
+        owner: "{{ scanner_user }}"
+        group: "{{ scanner_group }}"
+        mode: "0777"
+
+    - name: Create scanner directory
+      file:
+        path: "{{ scanner_mount_dir }}/scanner"
+        state: directory
+        owner: "{{ scanner_user }}"
+        group: "{{ scanner_group }}"
+        mode: "0777"
+
+    - name: Create config directory
+      file:
+        path: "{{ scanner_config_dir }}"
+        state: directory
+        owner: "{{ scanner_user }}"
+        group: "{{ scanner_group }}"
+        mode: "0755"
+
+    - name: Create Elasticsearch data directory
+      file:
+        path: "{{ elastic_data_dir }}"
+        state: directory
+        owner: "{{ elastic_user }}"
+        group: "{{ elastic_group }}"
+        mode: "0777"
+
+    - name: Create Elasticsearch nodes directory
+      file:
+        path: "{{ elastic_data_dir }}/nodes"
+        state: directory
+        owner: "{{ elastic_user }}"
+        group: "{{ elastic_group }}"
+        mode: "0777"
+
+    - name: Configure Samba archive share read-only
+      blockinfile:
+        path: /etc/samba/smb.conf
+        marker: "# {mark} ANSIBLE DOCHAUSER ARCHIVE SHARE"
+        block: |
+          [{{ smb_share_name }}]
+             path = {{ scanner_mount_dir }}/archive
+             browseable = yes
+             read only = yes
+             writable = no
+             guest ok = yes
+             public = yes
+             force user = {{ scanner_user }}
+             force group = {{ scanner_group }}
+      when: expose_archive_smb | bool
+
+    - name: Enable and restart Samba
+      systemd:
+        name: smbd
+        enabled: true
+        state: restarted
+      when: expose_archive_smb | bool
+
+    - name: Create projects directory
+      file:
+        path: "{{ projects_dir }}"
+        state: directory
+        owner: "{{ current_user }}"
+        group: "{{ current_user }}"
+        mode: "0755"
+
+    - name: Clone/update repositories
+      git:
+        repo: "{{ item.url }}"
+        dest: "{{ projects_dir }}/{{ item.name }}"
+        version: main
+        update: true
+        force: true
+      loop: "{{ repos }}"
+
+    - name: Fix ownership of all checked out projects
+      file:
+        path: "{{ projects_dir }}"
+        owner: "{{ current_user }}"
+        group: "{{ current_user }}"
+        recurse: true
+
+    - name: Customize header title when display name is set
+      ansible.builtin.replace:
+        path: "{{ dochausergui_src_dir }}/src/app/ui/header/header.component.html"
+        regexp: 'Doc Hauser'
+        replace: "{{ dochauser_display_name }}"
+      when:
+        - dochauser_display_name is defined
+        - dochauser_display_name | trim | length > 0
+
+    - name: Copy default config files if missing
+      copy:
+        src: "{{ item }}"
+        dest: "{{ scanner_config_dir }}/{{ item | basename }}"
+        owner: "{{ scanner_user }}"
+        group: "{{ scanner_group }}"
+        mode: "0644"
+        force: false
+      with_fileglob:
+        - "{{ batch_config_source_dir }}/*"
+
+    - name: Detect primary host IP address
+      set_fact:
+        host_ip: "{{ ansible_default_ipv4.address }}"
+
+    - name: Replace elasticsearch host in application.properties
+      replace:
+        path: "{{ dochausersrv_src_dir }}/src/main/resources/application.properties"
+        regexp: '^elasticsearch\.url=.*:9200'
+        replace: "elasticsearch.url={{ host_ip }}:9200"
+
+    - name: Install Ollama
+      shell: curl -fsSL https://ollama.com/install.sh | sh
+      args:
+        creates: /usr/local/bin/ollama
+      when: install_ollama | bool
+
+    - name: Ensure Ollama override directory exists
+      file:
+        path: /etc/systemd/system/ollama.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: install_ollama | bool
+
+    - name: Configure Ollama
+      copy:
+        dest: /etc/systemd/system/ollama.service.d/override.conf
+        content: |
+          [Service]
+          Environment="OLLAMA_HOST=0.0.0.0:11434"
+          Environment="OLLAMA_CONTEXT_LENGTH={{ ollama_context_size }}"
+        owner: root
+        group: root
+        mode: "0644"
+      when: install_ollama | bool
+
+    - name: Reload systemd and restart Ollama
+      systemd:
+        name: ollama
+        daemon_reload: true
+        enabled: true
+        state: restarted
+      when: install_ollama | bool
+
+    - name: Pull Ollama model
+      command: "ollama pull {{ ollama_base_model }}"
+      when: install_ollama | bool
+
+    - name: Maven build complete Dochauser project
+      command: mvn clean package -DskipTests
+      args:
+        chdir: "{{ dochauserbuild_src_dir }}"
+      become_user: "{{ current_user }}"
+
+    - name: Build and start dochausersrv
+      shell: |
+        if docker compose version >/dev/null 2>&1; then
+          docker compose up -d --build
+        else
+          docker-compose up -d --build
+        fi
+      args:
+        chdir: "{{ dochausersrv_src_dir }}"
+
+    - name: Build and start dochauserbatch
+      shell: |
+        if docker compose version >/dev/null 2>&1; then
+          docker compose up -d --build
+        else
+          docker-compose up -d --build
+        fi
+      args:
+        chdir: "{{ dochauserbatch_src_dir }}"
