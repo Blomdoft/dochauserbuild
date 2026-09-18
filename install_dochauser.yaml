@@ -53,12 +53,12 @@
     - name: Install required packages
       apt:
         name:
-          - openjdk-17-jdk
+          - openjdk-21-jdk
           - maven
           - git
           - curl
           - docker.io
-          - docker-compose
+          - docker-compose-v2
           - samba
         state: present
         update_cache: true
@@ -162,14 +162,6 @@
         group: "{{ elastic_group }}"
         mode: "0777"
 
-    - name: Create Elasticsearch nodes directory
-      file:
-        path: "{{ elastic_data_dir }}/nodes"
-        state: directory
-        owner: "{{ elastic_user }}"
-        group: "{{ elastic_group }}"
-        mode: "0777"
-
     - name: Configure Samba archive share read-only
       blockinfile:
         path: /etc/samba/smb.conf
@@ -219,7 +211,7 @@
 
     - name: Customize header title when display name is set
       ansible.builtin.replace:
-        path: "{{ dochausergui_src_dir }}/src/app/ui/header/header.component.html"
+        path: "{{ dochausergui_src_dir }}/src/components/Header.tsx"
         regexp: 'Doc Hauser'
         replace: "{{ dochauser_display_name }}"
       when:
@@ -293,21 +285,11 @@
       become_user: "{{ current_user }}"
 
     - name: Build and start dochausersrv
-      shell: |
-        if docker compose version >/dev/null 2>&1; then
-          docker compose up -d --build
-        else
-          docker-compose up -d --build
-        fi
+      command: docker compose up -d --build
       args:
         chdir: "{{ dochausersrv_src_dir }}"
 
     - name: Build and start dochauserbatch
-      shell: |
-        if docker compose version >/dev/null 2>&1; then
-          docker compose up -d --build
-        else
-          docker-compose up -d --build
-        fi
+      command: docker compose up -d --build
       args:
         chdir: "{{ dochauserbatch_src_dir }}"
