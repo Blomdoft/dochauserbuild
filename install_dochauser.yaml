@@ -14,7 +14,7 @@
     dochausersrv_src_dir: "{{ projects_dir }}/dochausersrv"
     dochauserbuild_src_dir: "{{ projects_dir }}/dochauserbuild"
 
-    dochauser_display_name: "Kaiserhaus DochHauser"
+    dochauser_display_name: "WH11 Doc"
 
     scanner_user: scanner
     scanner_group: scanner
