@@ -34,6 +34,8 @@
 
     expose_archive_smb: true
     smb_share_name: "dochauser_archive"
+    expose_scanner_smb: true
+    scanner_smb_share_name: "dochauser_scanner"
 
     install_ollama: false
     ollama_base_model: "gemma4:e2b"
@@ -177,13 +179,33 @@
              force user = {{ scanner_user }}
              force group = {{ scanner_group }}
       when: expose_archive_smb | bool
+      tags: samba
+
+    - name: Configure Samba scanner inbox writable
+      blockinfile:
+        path: /etc/samba/smb.conf
+        marker: "# {mark} ANSIBLE DOCHAUSER SCANNER SHARE"
+        block: |
+          [{{ scanner_smb_share_name }}]
+             path = {{ scanner_mount_dir }}/scanner
+             browseable = yes
+             read only = no
+             guest ok = yes
+             public = yes
+             force user = {{ scanner_user }}
+             force group = {{ scanner_group }}
+             create mask = 0660
+             directory mask = 0770
+      when: expose_scanner_smb | bool
+      tags: samba
 
     - name: Enable and restart Samba
       systemd:
         name: smbd
         enabled: true
         state: restarted
-      when: expose_archive_smb | bool
+      when: expose_archive_smb | bool or expose_scanner_smb | bool
+      tags: samba
 
     - name: Create projects directory
       file:
